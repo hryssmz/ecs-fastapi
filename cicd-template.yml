@@ -287,6 +287,7 @@ Resources:
               - sts:AssumeRole
       ManagedPolicyArns:
         - Ref: CodePipelineExecutionPolicy
+        - arn:aws:iam::aws:policy/AmazonECS_FullAccess
       Tags:
         - Key: ProjectName
           Value:
@@ -393,7 +394,7 @@ Resources:
                 ServiceName: "#{Deploy.ECSServiceName}"
                 FileName:
                   Ref: ImageDefinitionsFile
-                DeploymentTimeout: 3
+                DeploymentTimeout: 10
               InputArtifacts:
                 - Name: BuildArtifacts
               RunOrder: 2
