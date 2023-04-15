@@ -383,6 +383,8 @@ Resources:
                 - Name: SourceCode
               RunOrder: 1
 
+        - Name: ECSDeploy
+          Actions:
             - Name: ECSDeploy
               ActionTypeId:
                 Category: Deploy
@@ -397,7 +399,7 @@ Resources:
                 DeploymentTimeout: 10
               InputArtifacts:
                 - Name: BuildArtifacts
-              RunOrder: 2
+              RunOrder: 1
 
       Tags:
         - Key: ProjectName

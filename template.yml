@@ -390,10 +390,9 @@ Resources:
                 Ref: ECSLogGroup
               awslogs-stream-prefix: TaskDefinition
           HealthCheck:
-            Command: curl -f http://localhost || exit 1
-            Interval: 15
-            Retries: 3
-            Timeout: 5
+            Command:
+              - CMD-SHELL
+              - curl -f http://localhost || exit 1
 
   ECSService:
     Type: AWS::ECS::Service
