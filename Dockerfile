@@ -10,6 +10,6 @@ COPY ./myapp /myapp
 
 WORKDIR /myapp
 
-EXPOSE 8000
+EXPOSE 80
 
 CMD ["sh", "startup.sh"]

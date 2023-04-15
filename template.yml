@@ -7,22 +7,10 @@ Parameters:
     Description: Project name
     Default: ecs-fastapi
 
-  DesiredCapacity:
-    Type: Number
-    Description: DesiredCapacity for auto scaling group
-    Default: 1
-    MinValue: 0
-    MaxValue: 5
-    ConstraintDescription: must be an integer between 0 and 5
-
-Mappings:
-  RegionProfile2AMI:
-    ap-northeast-1:
-      AL2013: ami-067871d950411e643
-
-  RegionProfile2Type:
-    ap-northeast-1:
-      AL2013: t2.micro
+  ContainerName:
+    Type: String
+    Description: App container name
+    Default: myapp
 
 Resources:
   # VPC
@@ -30,6 +18,8 @@ Resources:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: 172.20.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
       Tags:
         - Key: ProjectName
           Value:
@@ -134,249 +124,13 @@ Resources:
       GatewayId:
         Ref: InternetGateway
 
-  # EC2
-  WebSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupName:
-        Fn::Sub: ${ProjectName}-WebSecurityGroup
-      GroupDescription: Web security group
-      VpcId:
-        Ref: VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
-          FromPort: 8000
-          ToPort: 8000
-          CidrIp: 0.0.0.0/0
-      Tags:
-        - Key: ProjectName
-          Value:
-            Ref: ProjectName
-        - Key: Name
-          Value:
-            Fn::Sub: ${ProjectName}-sg-web
-
-  EC2InstanceExecutionPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName:
-        Fn::Sub: ${ProjectName}-EC2InstanceExecutionPolicy
-      Description: Execution policy for EC2 instances
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: ArtifactsBucketAccess
-            Effect: Allow
-            Action:
-              - s3:GetBucketAcl
-              - s3:GetBucketLocation
-            Resource:
-              - Fn::Sub: arn:${AWS::Partition}:s3:::${ProjectName}-artifacts
-          - Sid: ArtifactsBucketObjectsAccess
-            Effect: Allow
-            Action:
-              - s3:GetObject
-              - s3:GetObjectVersion
-              - s3:PutObject
-            Resource:
-              - Fn::Sub: arn:${AWS::Partition}:s3:::${ProjectName}-artifacts/*
-
-  EC2InstanceRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName:
-        Fn::Sub: ${ProjectName}-EC2InstanceRole
-      Description: Service role for EC2 instance
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforAWSCodeDeploy
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-        - Ref: EC2InstanceExecutionPolicy
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action:
-              - sts:AssumeRole
-      Tags:
-        - Key: ProjectName
-          Value:
-            Ref: ProjectName
-
-  EC2InstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      InstanceProfileName:
-        Fn::Sub: ${ProjectName}-EC2InstanceProfile
-      Roles:
-        - Ref: EC2InstanceRole
-
-  CodeDeployAgentAssociation:
-    Type: AWS::SSM::Association
-    Properties:
-      AssociationName: InstallCodeDeployAgent
-      Name: AWS-ConfigureAWSPackage
-      Parameters:
-        action:
-          - Install
-        name:
-          - AWSCodeDeployAgent
-      ScheduleExpression: cron(0 2 ? * SUN *)
-      Targets:
-        - Key: tag:ProjectName
-          Values:
-            - Ref: ProjectName
-
-  # EC2 Auto Scaling
-  AsgLaunchTemplate:
-    Type: AWS::EC2::LaunchTemplate
-    Metadata:
-      AWS::CloudFormation::Init:
-        config:
-          files:
-            /etc/systemd/system/myapp.service:
-              content: |
-                [Unit]
-                Description=MyApp Service
-                After=network.target
-
-                [Service]
-                Type=simple
-                User=root
-                WorkingDirectory=/root/myapp
-                ExecStart=uvicorn main:app --host 0.0.0.0 --port 8000
-                Restart=always
-                RestartSec=3
-
-                [Install]
-                WantedBy=multi-user.target
-    Properties:
-      LaunchTemplateName:
-        Fn::Sub: ${ProjectName}-AsgLaunchTemplate
-      VersionDescription: Launch template for auto scaling group
-      TagSpecifications:
-        - ResourceType: launch-template
-          Tags:
-            - Key: ProjectName
-              Value:
-                Ref: ProjectName
-            - Key: Name
-              Value:
-                Fn::Sub: ${ProjectName}-lt-asg
-      LaunchTemplateData:
-        ImageId:
-          Fn::FindInMap:
-            - RegionProfile2AMI
-            - Ref: AWS::Region
-            - AL2013
-        InstanceType:
-          Fn::FindInMap:
-            - RegionProfile2Type
-            - Ref: AWS::Region
-            - AL2013
-        IamInstanceProfile:
-          Name:
-            Ref: EC2InstanceProfile
-        SecurityGroupIds:
-          - Ref: WebSecurityGroup
-        Monitoring:
-          Enabled: true
-        TagSpecifications:
-          - ResourceType: instance
-            Tags:
-              - Key: ProjectName
-                Value:
-                  Ref: ProjectName
-              - Key: Name
-                Value:
-                  Fn::Sub: ${ProjectName}-i-al2013
-        UserData:
-          Fn::Base64:
-            Fn::Sub: |
-              #!/bin/sh
-              dnf install -y python python3-pip
-              /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource AsgLaunchTemplate --region ${AWS::Region}
-
-              aws s3 cp s3://${ProjectName}-artifacts/${ProjectName}.zip /tmp/${ProjectName}.zip
-              unzip /tmp/${ProjectName}.zip -d /tmp/${ProjectName}
-              cp -r /tmp/${ProjectName}/myapp ~/myapp
-              pip install -r ~/myapp/requirements.txt
-              systemctl enable myapp.service
-              systemctl start myapp.service
-
-              /opt/aws/bin/cfn-signal -e 0 --stack ${ProjectName} --region ${AWS::Region} --resource AutoScalingGroup
-
-  AutoScalingGroup:
-    Type: AWS::AutoScaling::AutoScalingGroup
-    DependsOn: InternetGatewayAttachment
-    CreationPolicy:
-      ResourceSignal:
-        Count:
-          Ref: DesiredCapacity
-        Timeout: PT4M
-    UpdatePolicy:
-      AutoScalingRollingUpdate:
-        MaxBatchSize: 2
-        MinInstancesInService: 0
-        MinSuccessfulInstancesPercent: 100
-        SuspendProcesses:
-          - HealthCheck
-          - ReplaceUnhealthy
-          - AZRebalance
-          - AlarmNotification
-          - ScheduledActions
-        PauseTime: PT4M
-        WaitOnResourceSignals: true
-    Properties:
-      AutoScalingGroupName:
-        Fn::Sub: ${ProjectName}-AutoScalingGroup
-      MinSize: 0
-      MaxSize: 5
-      DesiredCapacity:
-        Ref: DesiredCapacity
-      DesiredCapacityType: units
-      DefaultInstanceWarmup: 120
-      HealthCheckGracePeriod: 120
-      HealthCheckType: EC2
-      VPCZoneIdentifier:
-        - Ref: Subnet
-        - Ref: Subnet2
-      LaunchTemplate:
-        LaunchTemplateId:
-          Ref: AsgLaunchTemplate
-        Version:
-          Fn::GetAtt: AsgLaunchTemplate.LatestVersionNumber
-      TargetGroupARNs:
-        - Ref: ALBTargetGroup
-      Tags:
-        - Key: ProjectName
-          Value:
-            Ref: ProjectName
-          PropagateAtLaunch: false
-        - Key: Name
-          Value:
-            Fn::Sub: ${ProjectName}-asg
-          PropagateAtLaunch: false
-
-  ScalingPolicy:
-    Type: AWS::AutoScaling::ScalingPolicy
-    Properties:
-      AutoScalingGroupName:
-        Ref: AutoScalingGroup
-      PolicyType: TargetTrackingScaling
-      TargetTrackingConfiguration:
-        PredefinedMetricSpecification:
-          PredefinedMetricType: ASGAverageCPUUtilization
-        TargetValue: 70
-
   # Elastic Load Balancing
   ALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn:
+      - InternetRoute
+      - SubnetRouteTableAssociation
+      - Subnet2RouteTableAssociation
     Properties:
       Name:
         Fn::Sub: ${ProjectName}-ALB
@@ -384,7 +138,7 @@ Resources:
       IpAddressType: ipv4
       Scheme: internet-facing
       SecurityGroups:
-        - Ref: WebSecurityGroup
+        - Ref: ALBSecurityGroup
       Subnets:
         - Ref: Subnet
         - Ref: Subnet2
@@ -398,7 +152,7 @@ Resources:
     Properties:
       Name:
         Fn::Sub: ${ProjectName}-ALBTargetGroup
-      TargetType: instance
+      TargetType: ip
       IpAddressType: ipv4
       Protocol: HTTP
       ProtocolVersion: HTTP1
@@ -433,61 +187,271 @@ Resources:
           TargetGroupArn:
             Ref: ALBTargetGroup
 
-  # CloudFront
-  CachePolicy:
-    Type: AWS::CloudFront::CachePolicy
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
     Properties:
-      CachePolicyConfig:
-        Name:
-          Fn::Sub: ${ProjectName}-CachePolicy
-        Comment:
-          Fn::Sub: ${ProjectName} cache policy
-        DefaultTTL: 86400
-        MinTTL: 1
-        MaxTTL: 31536000
-        ParametersInCacheKeyAndForwardedToOrigin:
-          EnableAcceptEncodingBrotli: true
-          EnableAcceptEncodingGzip: true
-          CookiesConfig:
-            CookieBehavior: none
-          HeadersConfig:
-            HeaderBehavior: none
-          QueryStringsConfig:
-            QueryStringBehavior: none
+      GroupName:
+        Fn::Sub: ${ProjectName}-ALBSecurityGroup
+      GroupDescription: ALB security group
+      VpcId:
+        Ref: VPC
+      SecurityGroupIngress:
+        - Description: HTTP inbound rule
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+        - Key: Name
+          Value:
+            Fn::Sub: ${ProjectName}-sg-alb
 
-  Distribution:
-    Type: AWS::CloudFront::Distribution
+  TargetSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
     Properties:
-      DistributionConfig:
-        Comment: CloudFront distribution
-        Enabled: true
-        Origins:
-          - Id:
-              Fn::GetAtt: ALB.DNSName
-            DomainName:
-              Fn::GetAtt: ALB.DNSName
-            CustomOriginConfig:
-              HTTPPort: 80
-              OriginProtocolPolicy: http-only
-        DefaultCacheBehavior:
-          CachePolicyId:
-            Ref: CachePolicy
-          AllowedMethods:
-            - GET
-            - HEAD
-          CachedMethods:
-            - GET
-            - HEAD
-          Compress: true
-          TargetOriginId:
-            Fn::GetAtt: ALB.DNSName
-          ViewerProtocolPolicy: allow-all
+      GroupName:
+        Fn::Sub: ${ProjectName}-TargetSecurityGroup
+      GroupDescription: Target security group
+      VpcId:
+        Ref: VPC
+      SecurityGroupIngress:
+        - Description: HTTP inbound rule for debug
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+        - Key: Name
+          Value:
+            Fn::Sub: ${ProjectName}-sg-tgt
+
+  ALBSecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: HTTP outbound rule
+      GroupId:
+        Ref: ALBSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      DestinationSecurityGroupId:
+        Ref: TargetSecurityGroup
+
+  TargetSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: HTTP inbound rule
+      GroupId:
+        Ref: TargetSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourceSecurityGroupId:
+        Ref: ALBSecurityGroup
+
+  # ECS
+  ECSNamespace:
+    Type: AWS::ServiceDiscovery::HttpNamespace
+    Properties:
+      Name:
+        Fn::Sub: ${ProjectName}-ECSNamespace
+      Description: ECS namespace
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName:
+        Fn::Sub: ${ProjectName}-ECSCluster
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+      Configuration:
+        ExecuteCommandConfiguration:
+          Logging: DEFAULT
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+      ServiceConnectDefaults:
+        Namespace:
+          Fn::GetAtt: ECSNamespace.Arn
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
+  ECSExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${ProjectName}-ECSExecutionRole
+      Description: Service role for ECS container agents
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
+  ECSTaskPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName:
+        Fn::Sub: ${ProjectName}-ECSTaskPolicy
+      Description: Execution policy for ECS containers
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:ListAllMyBuckets
+            Resource: "*"
+
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${ProjectName}-ECSTaskRole
+      Description: Service role for ECS containers
+      ManagedPolicyArns:
+        - Ref: ECSTaskPolicy
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
+  ECSLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/ecs/${ProjectName}-ECSLogGroup
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family:
+        Fn::Sub: ${ProjectName}-TaskDefinition
+      Cpu: 256
+      Memory: 512
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn:
+        Fn::GetAtt: ECSExecutionRole.Arn
+      TaskRoleArn:
+        Fn::GetAtt: ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name:
+            Ref: ContainerName
+          Image:
+            Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProjectName}
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region:
+                Ref: AWS::Region
+              awslogs-group:
+                Ref: ECSLogGroup
+              awslogs-stream-prefix: TaskDefinition
+
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ALBTargetGroup
+      - ALBListener
+    Properties:
+      ServiceName:
+        Fn::Sub: ${ProjectName}-ECSService
+      Cluster:
+        Ref: ECSCluster
+      TaskDefinition:
+        Ref: TaskDefinition
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - Ref: TargetSecurityGroup
+          Subnets:
+            - Ref: Subnet
+            - Ref: Subnet2
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+      LoadBalancers:
+        - ContainerName:
+            Ref: ContainerName
+          ContainerPort: 80
+          TargetGroupArn:
+            Ref: ALBTargetGroup
+      HealthCheckGracePeriodSeconds: 60
+      EnableECSManagedTags: true
+      PropagateTags: SERVICE
+      SchedulingStrategy: REPLICA
+
+  # Auto Scaling
+  ScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      MinCapacity: 1
+      MaxCapacity: 3
+      ResourceId:
+        Fn::Sub: service/${ECSCluster}/${ECSService.Name}
+      RoleARN:
+        Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+
+  ScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName:
+        Fn::Sub: ${ProjectName}-ScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId:
+        Ref: ScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
 
 Outputs:
   ALBDNSName:
     Value:
       Fn::GetAtt: ALB.DNSName
-
-  DistributionDomain:
-    Value:
-      Fn::GetAtt: Distribution.DomainName

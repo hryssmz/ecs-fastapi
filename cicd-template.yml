@@ -13,6 +13,16 @@ Parameters:
     Description: CodeCommit branch to deploy
     Default: main
 
+  ContainerName:
+    Type: String
+    Description: App container name
+    Default: myapp
+
+  ImageDefinitionsFile:
+    Type: String
+    Description: Path for the image definitions file
+    Default: image-definitions.json
+
 Resources:
   # CodeCommit
   CodeCommitRepository:
@@ -144,6 +154,57 @@ Resources:
       ManagedPolicyArns:
         - Ref: CodeBuildExecutionPolicy
 
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name:
+        Fn::Sub: ${ProjectName}-BuildProject
+      Description: Build project
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec:
+          Fn::Sub: buildspecs/buildspec.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value:
+              Ref: AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value:
+              Ref: AWS::AccountId
+          - Name: IMAGE_REPO_NAME
+            Value:
+              Ref: ECRRepository
+          - Name: IMAGE_DEFINITIONS_FILE
+            Value:
+              Ref: ImageDefinitionsFile
+          - Name: CONTAINER_NAME
+            Value:
+              Ref: ContainerName
+        PrivilegedMode: true
+      TimeoutInMinutes: 5
+      ServiceRole:
+        Fn::GetAtt: CodeBuildServiceRole.Arn
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
+  BuildProjectLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/codebuild/${BuildProject}
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
   # CodePipeline
   CodePipelineExecutionPolicy:
     Type: AWS::IAM::ManagedPolicy
@@ -179,6 +240,13 @@ Resources:
               - codecommit:UploadArchive
             Resource:
               - Fn::GetAtt: CodeCommitRepository.Arn
+          - Sid: CodeBuildAccess
+            Effect: Allow
+            Action:
+              - codebuild:StartBuild
+              - codebuild:BatchGetBuilds
+            Resource:
+              - Fn::GetAtt: BuildProject.Arn
           - Sid: CloudFormationAccess
             Effect: Allow
             Action:
@@ -274,6 +342,23 @@ Resources:
                   Fn::Sub: SourceCode::cicd-template.yml
               InputArtifacts:
                 - Name: SourceCode
+              RunOrder: 1
+
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              Configuration:
+                ProjectName:
+                  Ref: BuildProject
+              InputArtifacts:
+                - Name: SourceCode
+              OutputArtifacts:
+                - Name: BuildArtifacts
               RunOrder: 1
 
       Tags:
