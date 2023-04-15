@@ -1,0 +1,392 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: ecs-fastapi CI/CD stack
+
+Parameters:
+  ProjectName:
+    Type: String
+    Description: Project name
+    Default: ecs-fastapi
+
+  DeploymentBranch:
+    Type: String
+    Description: CodeCommit branch to deploy
+    Default: main
+
+Resources:
+  # CodeCommit
+  CodeCommitRepository:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName:
+        Ref: ProjectName
+      RepositoryDescription: My main repository
+      Triggers:
+        - Name: DeploymentBranchUpdateTrigger
+          DestinationArn:
+            Ref: CodeCommitUpdateTopic
+          Branches:
+            - Ref: DeploymentBranch
+          Events:
+            - createReference
+            - updateReference
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
+  # S3
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${ProjectName}-artifacts
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
+  # ECR
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName:
+        Ref: ProjectName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  # CloudFormation
+  CloudFormationServiceRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RoleName:
+        Fn::Sub: ${ProjectName}-CloudFormationServiceRole
+      Description: Service role for CloudFormation
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
+  # CodeBuild
+  CodeBuildExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName:
+        Fn::Sub: ${ProjectName}-CodeBuildExecutionPolicy
+      Description: Execution policy for CodeBuild
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CloudWatchLogsAccess
+            Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource:
+              - Fn::Sub: arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectName}*:log-stream:*
+          - Sid: ECRAuthorizationAccess
+            Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+            Resource: "*"
+          - Sid: ECRRepositoryAccess
+            Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:CompleteLayerUpload
+              - ecr:InitiateLayerUpload
+              - ecr:PutImage
+              - ecr:UploadLayerPart
+            Resource:
+              - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}*
+          - Sid: ArtifactsBucketAccess
+            Effect: Allow
+            Action:
+              - s3:GetBucketAcl
+              - s3:GetBucketLocation
+            Resource:
+              - Fn::GetAtt: ArtifactsBucket.Arn
+          - Sid: ArtifactsBucketObjectsAccess
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:PutObject
+            Resource:
+              - Fn::Sub: ${ArtifactsBucket.Arn}/*
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${ProjectName}-CodeBuildServiceRole
+      Description: Service role for CodeBuild
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - Ref: CodeBuildExecutionPolicy
+
+  # CodePipeline
+  CodePipelineExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName:
+        Fn::Sub: ${ProjectName}-CodePipelineExecutionPolicy
+      Description: Execution policy for CodePipeline
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ArtifactsBucketAccess
+            Effect: Allow
+            Action:
+              - s3:GetBucketAcl
+              - s3:GetBucketLocation
+            Resource:
+              - Fn::GetAtt: ArtifactsBucket.Arn
+          - Sid: ArtifactsBucketObjectsAccess
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:PutObject
+            Resource:
+              - Fn::Sub: ${ArtifactsBucket.Arn}/*
+          - Sid: CodeCommitAccess
+            Effect: Allow
+            Action:
+              - codecommit:CancelUploadArchive
+              - codecommit:GetBranch
+              - codecommit:GetCommit
+              - codecommit:GetUploadArchiveStatus
+              - codecommit:UploadArchive
+            Resource:
+              - Fn::GetAtt: CodeCommitRepository.Arn
+          - Sid: CloudFormationAccess
+            Effect: Allow
+            Action:
+              - cloudformation:CreateStack
+              - cloudformation:DeleteStack
+              - cloudformation:DescribeStacks
+              - cloudformation:UpdateStack
+              - cloudformation:CreateChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:SetStackPolicy
+              - cloudformation:ValidateTemplate
+            Resource: "*"
+          - Sid: IAMPassRolePermission
+            Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource: "*"
+            Condition:
+              StringEqualsIfExists:
+                iam:PassedToService:
+                  - cloudformation.amazonaws.com
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${ProjectName}-CodePipelineServiceRole
+      Description: Service role for CodePipeline
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - Ref: CodePipelineExecutionPolicy
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name:
+        Ref: ProjectName
+      RoleArn:
+        Fn::GetAtt: CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Location:
+          Ref: ArtifactsBucket
+        Type: S3
+      RestartExecutionOnUpdate: true
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: 1
+              Configuration:
+                BranchName:
+                  Ref: DeploymentBranch
+                RepositoryName:
+                  Fn::GetAtt: CodeCommitRepository.Name
+                PollForSourceChanges: false
+              OutputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+
+        - Name: DeployCICD
+          Actions:
+            - Name: DeployCICD
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: 1
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName:
+                  Fn::Sub: ${ProjectName}-cicd
+                Capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND
+                RoleArn:
+                  Fn::GetAtt: CloudFormationServiceRole.Arn
+                TemplatePath:
+                  Fn::Sub: SourceCode::cicd-template.yml
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
+  # SNS
+  CodeCommitUpdateTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName:
+        Fn::Sub: ${ProjectName}-CodeCommitUpdateTopic
+      FifoTopic: false
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
+  # Lambda
+  StartPipelineFunctionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName:
+        Fn::Sub: ${ProjectName}-StartPipelineFunctionPolicy
+      Description: Policy for StartPipelineFunction
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: StartPipelinePermission
+            Effect: Allow
+            Action:
+              - codepipeline:StartPipelineExecution
+            Resource:
+              - Fn::Sub: arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}
+
+  StartPipelineFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${ProjectName}-StartPipelineFunctionRole
+      Description: Service role for StartPipelineFunction
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - Ref: StartPipelineFunctionPolicy
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
+  StartPipelineFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${ProjectName}-StartPipelineFunction
+      Description: Start pipeline function
+      Role:
+        Fn::GetAtt: StartPipelineFunctionRole.Arn
+      Architectures:
+        - arm64
+      Runtime: nodejs18.x
+      Handler: index.handler
+      Environment:
+        Variables:
+          PIPELINE_NAME:
+            Ref: Pipeline
+      Events:
+        SNSEvent:
+          Type: SNS
+          Properties:
+            Topic:
+              Ref: CodeCommitUpdateTopic
+      InlineCode: |
+        const {
+          CodePipelineClient,
+          StartPipelineExecutionCommand,
+        } = require("@aws-sdk/client-codepipeline");
+
+        exports.handler = async () => {
+          const client = new CodePipelineClient({});
+          const command = new StartPipelineExecutionCommand({
+            name: process.env.PIPELINE_NAME,
+          });
+          const response = await client.send(command);
+          console.log(`Pipeline started: (${response.pipelineExecutionId})`);
+        };
+      Tags:
+        ProjectName:
+          Ref: ProjectName
+
+  StartPipelineFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/${StartPipelineFunction}
+      Tags:
+        - Key: ProjectName
+          Value:
+            Ref: ProjectName
+
+Outputs:
+  CodeCommitRepositoryCloneUrlHttp:
+    Value:
+      Fn::GetAtt: CodeCommitRepository.CloneUrlHttp
+
+  CodeCommitRepositoryCloneUrlSsh:
+    Value:
+      Fn::GetAtt: CodeCommitRepository.CloneUrlSsh
