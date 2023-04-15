@@ -344,22 +344,59 @@ Resources:
                 - Name: SourceCode
               RunOrder: 1
 
-        # - Name: Build
-        #   Actions:
-        #     - Name: Build
-        #       ActionTypeId:
-        #         Category: Build
-        #         Owner: AWS
-        #         Provider: CodeBuild
-        #         Version: 1
-        #       Configuration:
-        #         ProjectName:
-        #           Ref: BuildProject
-        #       InputArtifacts:
-        #         - Name: SourceCode
-        #       OutputArtifacts:
-        #         - Name: BuildArtifacts
-        #       RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              Configuration:
+                ProjectName:
+                  Ref: BuildProject
+              InputArtifacts:
+                - Name: SourceCode
+              OutputArtifacts:
+                - Name: BuildArtifacts
+              RunOrder: 1
+
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              Namespace: Deploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: 1
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName:
+                  Ref: ProjectName
+                Capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND
+                RoleArn:
+                  Fn::GetAtt: CloudFormationServiceRole.Arn
+                TemplatePath: SourceCode::template.yml
+              InputArtifacts:
+                - Name: SourceCode
+              RunOrder: 1
+
+            - Name: ECSDeploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: ECS
+                Version: 1
+              Configuration:
+                ClusterName: "#{Deploy.ECSCluster}"
+                ServiceName: "#{Deploy.ECSServiceName}"
+                FileName:
+                  Ref: ImageDefinitionsFile
+                DeploymentTimeout: 3
+              InputArtifacts:
+                - Name: BuildArtifacts
+              RunOrder: 2
 
       Tags:
         - Key: ProjectName
