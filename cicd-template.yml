@@ -344,22 +344,22 @@ Resources:
                 - Name: SourceCode
               RunOrder: 1
 
-        - Name: Build
-          Actions:
-            - Name: Build
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Provider: CodeBuild
-                Version: 1
-              Configuration:
-                ProjectName:
-                  Ref: BuildProject
-              InputArtifacts:
-                - Name: SourceCode
-              OutputArtifacts:
-                - Name: BuildArtifacts
-              RunOrder: 1
+        # - Name: Build
+        #   Actions:
+        #     - Name: Build
+        #       ActionTypeId:
+        #         Category: Build
+        #         Owner: AWS
+        #         Provider: CodeBuild
+        #         Version: 1
+        #       Configuration:
+        #         ProjectName:
+        #           Ref: BuildProject
+        #       InputArtifacts:
+        #         - Name: SourceCode
+        #       OutputArtifacts:
+        #         - Name: BuildArtifacts
+        #       RunOrder: 1
 
       Tags:
         - Key: ProjectName

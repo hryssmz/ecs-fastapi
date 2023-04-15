@@ -390,66 +390,66 @@ Resources:
                 Ref: ECSLogGroup
               awslogs-stream-prefix: TaskDefinition
 
-  ECSService:
-    Type: AWS::ECS::Service
-    DependsOn:
-      - ALBTargetGroup
-      - ALBListener
-    Properties:
-      ServiceName:
-        Fn::Sub: ${ProjectName}-ECSService
-      Cluster:
-        Ref: ECSCluster
-      TaskDefinition:
-        Ref: TaskDefinition
-      LaunchType: FARGATE
-      NetworkConfiguration:
-        AwsvpcConfiguration:
-          AssignPublicIp: ENABLED
-          SecurityGroups:
-            - Ref: TargetSecurityGroup
-          Subnets:
-            - Ref: Subnet
-            - Ref: Subnet2
-      DeploymentConfiguration:
-        MaximumPercent: 200
-        MinimumHealthyPercent: 50
-      LoadBalancers:
-        - ContainerName:
-            Ref: ContainerName
-          ContainerPort: 80
-          TargetGroupArn:
-            Ref: ALBTargetGroup
-      HealthCheckGracePeriodSeconds: 60
-      EnableECSManagedTags: true
-      PropagateTags: SERVICE
-      SchedulingStrategy: REPLICA
+  # ECSService:
+  #   Type: AWS::ECS::Service
+  #   DependsOn:
+  #     - ALBTargetGroup
+  #     - ALBListener
+  #   Properties:
+  #     ServiceName:
+  #       Fn::Sub: ${ProjectName}-ECSService
+  #     Cluster:
+  #       Ref: ECSCluster
+  #     TaskDefinition:
+  #       Ref: TaskDefinition
+  #     LaunchType: FARGATE
+  #     NetworkConfiguration:
+  #       AwsvpcConfiguration:
+  #         AssignPublicIp: ENABLED
+  #         SecurityGroups:
+  #           - Ref: TargetSecurityGroup
+  #         Subnets:
+  #           - Ref: Subnet
+  #           - Ref: Subnet2
+  #     DeploymentConfiguration:
+  #       MaximumPercent: 200
+  #       MinimumHealthyPercent: 50
+  #     LoadBalancers:
+  #       - ContainerName:
+  #           Ref: ContainerName
+  #         ContainerPort: 80
+  #         TargetGroupArn:
+  #           Ref: ALBTargetGroup
+  #     HealthCheckGracePeriodSeconds: 60
+  #     EnableECSManagedTags: true
+  #     PropagateTags: SERVICE
+  #     SchedulingStrategy: REPLICA
 
-  # Auto Scaling
-  ScalableTarget:
-    Type: AWS::ApplicationAutoScaling::ScalableTarget
-    Properties:
-      ServiceNamespace: ecs
-      ScalableDimension: ecs:service:DesiredCount
-      MinCapacity: 1
-      MaxCapacity: 3
-      ResourceId:
-        Fn::Sub: service/${ECSCluster}/${ECSService.Name}
-      RoleARN:
-        Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+  # # Auto Scaling
+  # ScalableTarget:
+  #   Type: AWS::ApplicationAutoScaling::ScalableTarget
+  #   Properties:
+  #     ServiceNamespace: ecs
+  #     ScalableDimension: ecs:service:DesiredCount
+  #     MinCapacity: 1
+  #     MaxCapacity: 3
+  #     ResourceId:
+  #       Fn::Sub: service/${ECSCluster}/${ECSService.Name}
+  #     RoleARN:
+  #       Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
 
-  ScalingPolicy:
-    Type: AWS::ApplicationAutoScaling::ScalingPolicy
-    Properties:
-      PolicyName:
-        Fn::Sub: ${ProjectName}-ScalingPolicy
-      PolicyType: TargetTrackingScaling
-      ScalingTargetId:
-        Ref: ScalableTarget
-      TargetTrackingScalingPolicyConfiguration:
-        TargetValue: 70
-        PredefinedMetricSpecification:
-          PredefinedMetricType: ECSServiceAverageCPUUtilization
+  # ScalingPolicy:
+  #   Type: AWS::ApplicationAutoScaling::ScalingPolicy
+  #   Properties:
+  #     PolicyName:
+  #       Fn::Sub: ${ProjectName}-ScalingPolicy
+  #     PolicyType: TargetTrackingScaling
+  #     ScalingTargetId:
+  #       Ref: ScalableTarget
+  #     TargetTrackingScalingPolicyConfiguration:
+  #       TargetValue: 70
+  #       PredefinedMetricSpecification:
+  #         PredefinedMetricType: ECSServiceAverageCPUUtilization
 
 Outputs:
   ALBDNSName:
